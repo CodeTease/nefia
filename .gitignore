@@ -1,1 +1,10 @@
 nefia
+*.exe
+
+# Vegh files (CodeTease's Snapshot tool)
+*.vegh
+.veghcache
+# PyVegh's Vegh Hooks
+.veghhooks.json
+# Old Vegh files extension, kept for backward compatibility
+*.snap
