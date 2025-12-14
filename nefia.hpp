@@ -45,7 +45,7 @@ const std::string NEFIA_VERSION = "0.1.0";
 
 struct NefiaConfig {
     int buffer_size = 30720; // 30KB Default
-    int thread_pool_size = std::thread::hardware_concurrency() > 0 ? std::thread::hardware_concurrency() : 4;
+    unsigned int thread_pool_size = std::thread::hardware_concurrency() > 0 ? std::thread::hardware_concurrency() : 4;
 };
 
 inline std::string get_mime_type(std::string path) {
@@ -448,7 +448,7 @@ public:
         }
 
         std::cout << "--------------------------------------" << std::endl;
-        std::cout << "🔥 Nefia v" << NEFIA_VERSION << " Ready." << std::endl;
+        std::cout << "🔥 Nefia v" << NEFIA_VERSION << " (ThreadPool & Routing) Ready." << std::endl;
         std::cout << "👉 http://localhost:" << port << std::endl;
         std::cout << "--------------------------------------" << std::endl;
 
