@@ -11,6 +11,9 @@
 - **Middleware System:** Easy interception for logging, auth, etc.
 - **Thread Pool:** Efficient connection handling with a configurable thread pool.
 - **Cross-Platform:** Works on Linux, macOS, and Windows.
+- **JSON Support:** Built-in JSON body parser and `res.json()` helper.
+- **Cookie Management:** Easy access to request cookies and `set_cookie` helper.
+- **HTTP Keep-Alive:** Efficient connection reuse for better performance.
 
 ## Usage
 
@@ -65,7 +68,22 @@ int main() {
         res.send("User ID: " + req.get_param("id"));
     });
 
-    // 5. Start Server
+    // 5. JSON API Example
+    app.post("/api/echo", [](const Request& req, Response& res) {
+        std::string name = "Guest";
+        if (req.json_body.count("name")) {
+            name = req.json_body.at("name");
+        }
+        res.json("{\"message\": \"Hello " + name + "\"}");
+    });
+
+    // 6. Cookie Example
+    app.get("/login", [](const Request& req, Response& res) {
+        res.set_cookie("session", "xyz123", "Path=/; HttpOnly");
+        res.send("Cookie Set!");
+    });
+
+    // 7. Start Server
     app.listen();
     return 0;
 }
