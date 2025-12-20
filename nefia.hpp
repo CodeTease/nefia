@@ -52,6 +52,13 @@ inline std::string get_mime_type(std::string path) {
     if (path.find(".html") != std::string::npos) return "text/html";
     if (path.find(".css")  != std::string::npos) return "text/css";
     if (path.find(".js")   != std::string::npos) return "application/javascript";
+    if (path.find(".json") != std::string::npos) return "application/json";
+    if (path.find(".png")  != std::string::npos) return "image/png";
+    if (path.find(".jpg")  != std::string::npos) return "image/jpeg";
+    if (path.find(".jpeg") != std::string::npos) return "image/jpeg";
+    if (path.find(".svg")  != std::string::npos) return "image/svg+xml";
+    if (path.find(".ico")  != std::string::npos) return "image/x-icon";
+    if (path.find(".woff2") != std::string::npos) return "font/woff2";
     return "text/plain";
 }
 
@@ -63,9 +70,16 @@ struct Request {
     std::string body;                          // Raw POST body
     std::map<std::string, std::string> form;   // Parsed form data
     std::map<std::string, std::string> params; // Path parameters (e.g., :id)
+    std::map<std::string, std::string> cookies; // Parsed cookies
+    std::map<std::string, std::string> json_body; // Parsed JSON body
 
     std::string get_header(std::string key) const {
         if (headers.find(key) != headers.end()) return headers.at(key);
+        return "";
+    }
+
+    std::string get_cookie(std::string key) const {
+        if (cookies.find(key) != cookies.end()) return cookies.at(key);
         return "";
     }
 
@@ -94,6 +108,15 @@ struct Response {
     void set_header(std::string key, std::string val) {
         headers[key] = val;
     }
+
+    void set_cookie(std::string key, std::string value, std::string options = "") {
+        std::string cookie_str = key + "=" + value;
+        if (!options.empty()) {
+            cookie_str += "; " + options;
+        }
+        new_cookies.push_back(cookie_str);
+    }
+    std::vector<std::string> new_cookies;
 
     void send(std::string text) {
         body = text;
@@ -245,6 +268,47 @@ private:
         return data;
     }
 
+    std::map<std::string, std::string> parse_json_simple(std::string raw) {
+        std::map<std::string, std::string> data;
+        // Very basic JSON parser for flat string/number/bool object
+        // Example: {"key": "val", "num": 123}
+
+        size_t pos = 0;
+        while(pos < raw.size()) {
+            size_t quote_start = raw.find('"', pos);
+            if(quote_start == std::string::npos) break;
+            size_t quote_end = raw.find('"', quote_start + 1);
+            if(quote_end == std::string::npos) break;
+            
+            std::string k = raw.substr(quote_start + 1, quote_end - quote_start - 1);
+            
+            size_t colon = raw.find(':', quote_end);
+            if(colon == std::string::npos) break;
+            
+            // Find value start
+            size_t val_start = colon + 1;
+            while(val_start < raw.size() && isspace(raw[val_start])) val_start++;
+            if(val_start >= raw.size()) break;
+
+            if(raw[val_start] == '"') {
+                // String value
+                size_t val_end = raw.find('"', val_start + 1);
+                if(val_end == std::string::npos) break;
+                data[k] = raw.substr(val_start + 1, val_end - val_start - 1);
+                pos = val_end + 1;
+            } else {
+                // Primitive value (number, bool, null)
+                size_t val_end = val_start;
+                while(val_end < raw.size() && (isalnum(raw[val_end]) || raw[val_end] == '.' || raw[val_end] == '-')) {
+                    val_end++;
+                }
+                data[k] = raw.substr(val_start, val_end - val_start);
+                pos = val_end;
+            }
+        }
+        return data;
+    }
+
     Request parse_request(const char* buffer, size_t length) {
         Request req;
         std::string raw_data(buffer, length);
@@ -287,11 +351,29 @@ private:
                 std::string val = line.substr(colon_pos + 1);
                 if (!val.empty() && val[0] == ' ') val.erase(0, 1);
                 req.headers[key] = val;
+
+                if (key == "Cookie") {
+                    std::stringstream cookie_ss(val);
+                    std::string segment;
+                    while (std::getline(cookie_ss, segment, ';')) {
+                        size_t eq = segment.find('=');
+                        if (eq != std::string::npos) {
+                            std::string c_key = segment.substr(0, eq);
+                            std::string c_val = segment.substr(eq + 1);
+                            while (!c_key.empty() && c_key[0] == ' ') c_key.erase(0, 1);
+                            req.cookies[c_key] = c_val;
+                        }
+                    }
+                }
             }
         }
 
         if (!req.body.empty()) {
-           req.form = parse_url_encoded(req.body);
+           if (req.get_header("Content-Type").find("application/json") != std::string::npos) {
+               req.json_body = parse_json_simple(req.body);
+           } else {
+               req.form = parse_url_encoded(req.body);
+           }
         }
         return req;
     }
@@ -313,74 +395,111 @@ private:
     }
 
     void handle_client(socket_t client_socket) {
+        // Set Receive Timeout (e.g., 5 seconds) to prevent blocking indefinitely
+        #ifdef _WIN32
+        DWORD timeout = 5000;
+        setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+        #else
+        struct timeval tv;
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+        #endif
+
         std::vector<char> buffer(config.buffer_size, 0);
-        int bytes_read = recv(client_socket, buffer.data(), config.buffer_size, 0);
-        if (bytes_read <= 0) {
-            CLOSE_SOCKET(client_socket);
-            return;
-        }
 
-        Request req = parse_request(buffer.data(), static_cast<size_t>(bytes_read));
-        Response res;
-
-        if (!req.path.empty()) {
-            std::cout << "[Nefia] " << req.method << " " << req.path << std::endl;
-        }
-
-        // Run Middleware
-        bool continue_processing = true;
-        for (auto& mw : middlewares) {
-            if (!mw(req, res)) {
-                continue_processing = false;
+        while (true) {
+            // Check if socket is still valid/connected might be needed but recv handles it
+            int bytes_read = recv(client_socket, buffer.data(), config.buffer_size, 0);
+            if (bytes_read <= 0) {
+                // Connection closed or timeout/error
                 break;
             }
-        }
 
-        if (continue_processing) {
-            std::string route_key = req.method + ":" + req.path;
-            bool route_found = false;
+            Request req = parse_request(buffer.data(), static_cast<size_t>(bytes_read));
+            Response res;
 
-            // 1. Check Static Routes
-            if (static_routes.find(route_key) != static_routes.end()) {
-                static_routes[route_key](req, res);
-                route_found = true;
-            } 
-            // 2. Check Dynamic Routes
-            else {
-                for (const auto& dr : dynamic_routes) {
-                    if (dr.method == req.method) {
-                        std::map<std::string, std::string> params;
-                        if (match_dynamic_route(dr.pattern, req.path, params)) {
-                            req.params = params;
-                            dr.handler(req, res);
-                            route_found = true;
-                            break;
-                        }
-                    }
+            if (!req.path.empty()) {
+                std::cout << "[Nefia] " << req.method << " " << req.path << std::endl;
+            }
+
+            // Run Middleware
+            bool continue_processing = true;
+            for (auto& mw : middlewares) {
+                if (!mw(req, res)) {
+                    continue_processing = false;
+                    break;
                 }
             }
 
-            if (!route_found) {
-                res.status_code = 404;
-                res.body = "<h1>404 Not Found</h1>";
+            if (continue_processing) {
+                std::string route_key = req.method + ":" + req.path;
+                bool route_found = false;
+
+                // 1. Check Static Routes
+                if (static_routes.find(route_key) != static_routes.end()) {
+                    static_routes[route_key](req, res);
+                    route_found = true;
+                } 
+                // 2. Check Dynamic Routes
+                else {
+                    for (const auto& dr : dynamic_routes) {
+                        if (dr.method == req.method) {
+                            std::map<std::string, std::string> params;
+                            if (match_dynamic_route(dr.pattern, req.path, params)) {
+                                req.params = params;
+                                dr.handler(req, res);
+                                route_found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!route_found) {
+                    res.status_code = 404;
+                    res.body = "<h1>404 Not Found</h1>";
+                }
+            }
+
+            // Check connection header from request to decide if we should close
+            bool keep_alive = true;
+            std::string conn_header = req.get_header("Connection");
+            // HTTP 1.1 defaults to keep-alive. HTTP 1.0 defaults to close.
+            // Simplified logic: close if explicitly requested.
+            if (conn_header == "close") {
+                keep_alive = false;
+            }
+
+            std::stringstream response_stream;
+            response_stream << "HTTP/1.1 " << res.status_code << " OK\r\n";
+            response_stream << "Content-Type: " << res.content_type << "\r\n";
+            response_stream << "Server: Nefia/" << NEFIA_VERSION << " (Teaserverse)\r\n";
+            response_stream << "Content-Length: " << res.body.size() << "\r\n";
+            
+            if (!keep_alive) {
+                response_stream << "Connection: close\r\n";
+            } else {
+                response_stream << "Connection: keep-alive\r\n";
+            }
+            
+            for(auto const& [key, val] : res.headers) {
+                response_stream << key << ": " << val << "\r\n";
+            }
+            for(const auto& cookie : res.new_cookies) {
+                response_stream << "Set-Cookie: " << cookie << "\r\n";
+            }
+
+            response_stream << "\r\n";
+            response_stream << res.body;
+
+            std::string final_response = response_stream.str();
+            int send_result = send(client_socket, final_response.c_str(), final_response.size(), 0);
+            
+            if (send_result < 0 || !keep_alive) {
+                break;
             }
         }
-
-        std::stringstream response_stream;
-        response_stream << "HTTP/1.1 " << res.status_code << " OK\r\n";
-        response_stream << "Content-Type: " << res.content_type << "\r\n";
-        response_stream << "Server: Nefia/" << NEFIA_VERSION << " (Teaserverse)\r\n";
-        response_stream << "Content-Length: " << res.body.size() << "\r\n";
-        
-        for(auto const& [key, val] : res.headers) {
-            response_stream << key << ": " << val << "\r\n";
-        }
-
-        response_stream << "\r\n";
-        response_stream << res.body;
-
-        std::string final_response = response_stream.str();
-        send(client_socket, final_response.c_str(), final_response.size(), 0);
         CLOSE_SOCKET(client_socket);
     }
 

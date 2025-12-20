@@ -48,6 +48,34 @@ int main() {
     app.get("/secret", [](const Request& req, Response& res) {
         res.send("Welcome to the secret area!");
     });
+
+    // 7. JSON Test Route
+    app.get("/api/json", [](const Request& req, Response& res) {
+        res.json("{\"message\": \"Hello JSON\", \"status\": \"ok\"}");
+    });
+    
+    app.post("/api/json", [](const Request& req, Response& res) {
+        std::string name = "Unknown";
+        if (req.json_body.find("name") != req.json_body.end()) {
+            name = req.json_body.at("name");
+        }
+        res.json("{\"received_name\": \"" + name + "\"}");
+    });
+
+    // 8. Cookie Test Routes
+    app.get("/login", [](const Request& req, Response& res) {
+        res.set_cookie("session_id", "12345", "Path=/; HttpOnly");
+        res.send("Cookie Set!");
+    });
+
+    app.get("/dashboard", [](const Request& req, Response& res) {
+        std::string session = req.get_cookie("session_id");
+        if (session == "12345") {
+            res.send("Welcome back, user 12345!");
+        } else {
+            res.send("Who are you? (No cookie found)");
+        }
+    });
     
     app.listen();
     return 0;
